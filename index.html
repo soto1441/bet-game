@@ -33,6 +33,13 @@ li.me{font-weight:700;color:var(--ac)}
 .adm{display:grid;grid-template-columns:1fr 84px auto auto;gap:6px;align-items:center;padding:8px 0;border-bottom:1px solid var(--bd);font-size:14px}
 .adm input{padding:7px 8px;font-size:14px}
 .adm button{padding:7px 10px;font-size:13px}
+.admp{padding:10px 0;border-bottom:1px solid var(--bd);font-size:14px}
+.admp .g{display:flex;gap:6px;margin-top:6px;align-items:center}
+.admp .g span{font-size:12px;color:var(--mut);flex:0 0 68px}
+.admp input{padding:7px 8px;font-size:14px;min-width:0}
+.admp button{padding:7px 10px;font-size:13px;flex:0 0 auto}
+select{width:100%;padding:11px 12px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx);font-size:16px}
+.sec{margin:12px 0 4px;font-size:13px;color:var(--mut)}
 </style>
 </head>
 <body>
@@ -49,15 +56,16 @@ li.me{font-weight:700;color:var(--ac)}
     <div class="sub" id="who"></div>
     <div class="pts" id="pts">0P</div>
     <div class="sub" id="rec"></div>
-    <input id="amt" type="text" placeholder="!배팅 100  (금액 또는 올인)" aria-label="베팅 명령어">
+    <input id="amt" type="text" placeholder="금액 입력 (예: 100 / 올인)" aria-label="베팅 명령어">
     <div class="row" style="margin-top:10px"><button id="go">베팅!</button></div>
     <div class="notice" id="odds"></div>
     <div class="msg" id="msg"></div>
-    <div class="row" style="margin-top:6px"><button class="alt hide" id="reset">포인트 바닥났어요 · 다시 시작</button></div>
+    <div class="row" style="margin-top:6px"><button class="alt hide" id="reset">포인트 바닥났어요 · 다시 시작 (랭킹 점수 −1,000)</button></div>
   </section>
 
   <section class="card">
     <strong>🏆 랭킹</strong>
+    <div class="notice" style="margin:2px 0 4px">점수 = 보유 포인트 − (재시작 횟수 × 1,000)</div>
     <ol id="rank"><li><span>불러오는 중…</span></li></ol>
     <div class="notice" id="notice"></div>
   </section>
@@ -66,6 +74,18 @@ li.me{font-weight:700;color:var(--ac)}
 
   <section class="card hide" id="admin">
     <strong>🛠 관리자 모드</strong>
+    <div class="sec">전체 설정 (모든 참가자 공통)</div>
+    <div class="row"><input id="cfgRate" type="number" min="0" max="100" step="1" placeholder="성공 확률 (%)" aria-label="성공 확률 퍼센트"><input id="cfgPay" type="number" min="0.1" step="0.1" placeholder="성공 배수 (배)" aria-label="성공 시 배수"></div>
+    <div class="row" style="margin-top:8px"><button id="cfgSave">전체 설정 저장</button></div>
+    <div class="sec">베팅금 전체 지급/차감 (모든 참가자에게 한 번에)</div>
+    <div class="row"><input id="giveAll" type="number" placeholder="±금액 (예: 500 / -300)" aria-label="전체 지급 금액"></div>
+    <div class="row" style="margin-top:8px"><button id="giveAllBtn">전원에게 지급/차감</button></div>
+    <div class="sec">특정 참가자 지목 지급/차감</div>
+    <div class="row"><input id="giveSearch" type="search" placeholder="참가자 이름 검색" autocomplete="off" aria-label="참가자 이름 검색"></div>
+    <div id="giveResults" class="notice"></div>
+    <div id="giveChosen" style="font-weight:600;margin-top:6px"></div>
+    <div class="row" style="margin-top:8px"><input id="giveOne" type="number" placeholder="±금액 (예: 500 / -300)" aria-label="지급 금액"><button id="giveOneBtn" style="flex:0 0 auto;padding:12px 18px">지급</button></div>
+    <div class="sec">참가자별 설정</div>
     <div id="admList"></div>
     <div class="row" style="margin-top:10px"><button class="alt" id="admReset">전체 초기화</button><button class="alt" id="admOut">나가기</button></div>
   </section>
@@ -74,14 +94,16 @@ li.me{font-weight:700;color:var(--ac)}
 <script>
 // Firebase Realtime Database 주소를 넣으면 모두가 함께 랭킹을 공유해요. 예: https://내프로젝트-default-rtdb.firebaseio.com
 const FIREBASE_URL = "".replace(/\/+$/, "");
-// 관리자 비밀번호의 SHA-256 해시예요. 기본 비밀번호는 admin1234 이니 꼭 바꿔서 쓰세요.
-const ADMIN_HASH = "ac9689e2272427085e35b9d3e3e8bed88cb3434828b43b86fc0596cad4c6e270";
+// 관리자 비밀번호의 SHA-256 해시예요.
+const ADMIN_HASH = "415153211ae164c717321da075fd0bc0cae0a049ff4db76d8bde923ba8019828";
 const START = 1000;
 const WIN_RATE = 0.3; // 성공 확률 (0~1)
 const PAYOUT = 2;     // 성공 시 건 금액의 몇 배를 얻는지
 let db = false, uid = null, me = null, busy = false, isAdmin = false, allPlayers = [];
+let cfg = { winRate: WIN_RATE, payout: PAYOUT };
 const $ = id => document.getElementById(id);
 const fmt = n => Number(n).toLocaleString("ko-KR");
+const score = p => p.points - (p.resets || 0) * START; // 랭킹 점수 = 보유 포인트 - 재시작 횟수 x 시작 포인트
 
 function lsGet(){ try { return JSON.parse(localStorage.getItem("bet-me")); } catch(e){ return null; } }
 function lsSet(){ try { localStorage.setItem("bet-me", JSON.stringify(me)); } catch(e){} }
@@ -104,9 +126,10 @@ function showGame(){
 function render(){
   $("who").textContent = me.name + " 님";
   $("pts").textContent = fmt(me.points) + "P";
-  $("rec").textContent = me.wins + "승 " + me.losses + "패";
+  $("rec").textContent = me.wins + "승 " + me.losses + "패 · 재시작 " + (me.resets || 0) + "회";
   $("reset").classList.toggle("hide", me.points >= 10);
   $("go").disabled = me.points < 10;
+  updateOdds();
 }
 
 function renderRank(list){
@@ -118,8 +141,8 @@ function renderRank(list){
     if (p.uid === uid || (!uid && me && p.name === me.name)) li.className = "me";
     const a = document.createElement("span"), b = document.createElement("span");
     const medal = ["🥇","🥈","🥉"][i] || (i + 1) + "위";
-    a.textContent = medal + " " + p.name;
-    b.textContent = fmt(p.points) + "P";
+    a.textContent = medal + " " + p.name + ((p.resets || 0) ? " (재시작 " + p.resets + "회)" : "");
+    b.textContent = fmt(score(p)) + "점";
     li.append(a, b); el.append(li);
   });
 }
@@ -149,19 +172,111 @@ async function api(method, path, body){
   } catch(e){ alert("요청에 실패했어요."); }
 }
 
+function updateOdds(){
+  const rate = me && typeof me.winRate === "number" ? me.winRate : cfg.winRate;
+  $("odds").textContent = "성공 확률 " + Math.round(rate * 100) + "% · 성공하면 건 금액의 " + cfg.payout + "배 획득, 실패하면 잃어요.";
+}
+
+async function loadCfg(){
+  if (!FIREBASE_URL) { updateOdds(); return; }
+  try {
+    const c = await (await fetch(FIREBASE_URL + "/config.json")).json();
+    if (c && typeof c.winRate === "number") cfg.winRate = Math.min(1, Math.max(0, c.winRate));
+    if (c && typeof c.payout === "number" && c.payout > 0) cfg.payout = c.payout;
+  } catch(e){}
+  updateOdds();
+}
+
+function needServer(){
+  if (!FIREBASE_URL) { alert("서버 주소(FIREBASE_URL)를 먼저 설정해야 해요."); return true; }
+  return false;
+}
+const num = i => Number(i.value);
+
+function setPts(key, i){
+  if (i.value === "") { alert("값을 입력하세요."); return; }
+  api("PATCH", "/players/" + key, { points: Math.max(0, Math.floor(num(i))) });
+}
+async function adjust(key, i){
+  const d = Math.floor(num(i));
+  if (!d) { alert("±금액을 입력하세요. 예: 500 또는 -300"); return; }
+  if (needServer()) return;
+  try {
+    const o = await (await fetch(FIREBASE_URL + "/players/" + key + ".json")).json();
+    if (!o) return;
+    await api("PATCH", "/players/" + key, { points: Math.max(0, Math.floor(o.points + d)) });
+  } catch(e){ alert("요청에 실패했어요."); }
+}
+function setRate(key, i){
+  const r = num(i);
+  if (i.value === "" || !(r >= 0 && r <= 100)) { alert("0~100 사이 숫자를 입력하세요."); return; }
+  api("PATCH", "/players/" + key, { winRate: r / 100 });
+}
+
+function grp(label, ph, val, btns){
+  const g = document.createElement("div"); g.className = "g";
+  const l = document.createElement("span"); l.textContent = label;
+  const i = document.createElement("input"); i.type = "number"; i.placeholder = ph; i.value = val; i.setAttribute("aria-label", label);
+  g.append(l, i);
+  btns.forEach(([t, fn, alt]) => { const b = document.createElement("button"); if (alt) b.className = "alt"; b.textContent = t; b.onclick = () => fn(i); g.append(b); });
+  return g;
+}
+
+let giveKey = null;
+const norm = t => String(t || "").normalize("NFC").replace(/\s+/g, "").toLowerCase();
+function findHits(){
+  const q = norm($("giveSearch").value);
+  return q ? allPlayers.filter(p => norm(p.name).includes(q)) : [];
+}
+// 이름이 정확히 일치하는 사람이 한 명이거나, 검색 결과가 한 명뿐이면 자동 선택
+function autoPick(){
+  const q = norm($("giveSearch").value), hits = findHits();
+  const exact = hits.filter(p => norm(p.name) === q);
+  if (exact.length === 1) giveKey = exact[0].key;
+  else if (hits.length === 1) giveKey = hits[0].key;
+}
+function fillTargets(){
+  const box = $("giveResults"); box.textContent = "";
+  if (!giveKey) autoPick();
+  const cur = allPlayers.find(p => p.key === giveKey);
+  $("giveChosen").textContent = cur ? "선택: " + cur.name + " (" + fmt(cur.points) + "P)" : "선택된 참가자가 없어요.";
+  if (!$("giveSearch").value.trim()) { box.textContent = "이름을 입력하면 검색 결과가 나와요."; return; }
+  if (!allPlayers.length) { box.textContent = "참가자 목록이 비어 있어요. 서버 주소(FIREBASE_URL)와 인터넷 연결을 확인하세요."; return; }
+  const hits = findHits().slice(0, 8);
+  if (!hits.length) { box.textContent = "일치하는 참가자가 없어요. (현재 참가자 " + allPlayers.length + "명)"; return; }
+  hits.forEach(p => {
+    const b = document.createElement("button"); b.className = "alt";
+    b.style.cssText = "display:block;width:100%;margin-top:4px;text-align:left;padding:9px 12px" + (p.key === giveKey ? ";outline:2px solid var(--ac)" : "");
+    b.textContent = p.name + " (" + fmt(p.points) + "P)" + ((p.resets || 0) ? " · 재시작 " + p.resets + "회" : "");
+    b.onclick = () => { giveKey = p.key; fillTargets(); };
+    box.append(b);
+  });
+}
+$("giveSearch").addEventListener("input", async () => {
+  giveKey = null;
+  if (!allPlayers.length && FIREBASE_URL) await loadRank();
+  fillTargets();
+});
+
 function renderAdmin(){
+  fillTargets();
   const box = $("admList");
   box.textContent = "";
   if (!allPlayers.length) { box.textContent = "참가자가 없어요."; return; }
   allPlayers.forEach(p => {
-    const row = document.createElement("div"); row.className = "adm";
-    const name = document.createElement("span"); name.textContent = p.name + " (" + fmt(p.points) + "P)";
-    const inp = document.createElement("input"); inp.type = "number"; inp.value = p.points; inp.min = 0;
-    const ok = document.createElement("button"); ok.textContent = "적용";
-    ok.onclick = () => api("PATCH", "/players/" + p.key, { points: Math.max(0, Math.floor(Number(inp.value) || 0)) });
-    const del = document.createElement("button"); del.className = "alt"; del.textContent = "삭제";
+    const row = document.createElement("div"); row.className = "admp";
+    const head = document.createElement("div"); head.style.fontWeight = "600";
+    const has = typeof p.winRate === "number";
+    head.textContent = p.name + " · " + fmt(p.points) + "P · 재시작 " + (p.resets || 0) + "회" + (has ? " · 개인 확률 " + Math.round(p.winRate * 100) + "%" : "");
+    const del = document.createElement("button"); del.className = "alt"; del.textContent = "참가자 삭제"; del.style.marginTop = "6px";
     del.onclick = () => { if (confirm(p.name + " 님을 삭제할까요?")) api("DELETE", "/players/" + p.key); };
-    row.append(name, inp, ok, del); box.append(row);
+    row.append(head,
+      grp("포인트", "설정값", p.points, [["적용", i => setPts(p.key, i)]]),
+      grp("베팅금 지급", "±금액", "", [["반영", i => adjust(p.key, i)]]),
+      grp("확률 %", "개인 확률", has ? Math.round(p.winRate * 100) : "", [["적용", i => setRate(p.key, i)], ["해제", () => api("PATCH", "/players/" + p.key, { winRate: null }), true]]),
+      grp("재시작", "횟수", p.resets || 0, [["적용", i => { if (i.value === "") { alert("값을 입력하세요."); return; } api("PATCH", "/players/" + p.key, { resets: Math.max(0, Math.floor(num(i))) }); }]]),
+      del);
+    box.append(row);
   });
 }
 
@@ -174,18 +289,50 @@ $("admBtn").onclick = async () => {
   if (!(window.crypto && crypto.subtle)) { alert("이 브라우저에서는 관리자 확인을 할 수 없어요. https 주소로 접속해 주세요."); return; }
   if ((await sha(pw)) !== ADMIN_HASH) { alert("비밀번호가 틀렸어요."); return; }
   isAdmin = true; $("admin").classList.remove("hide"); $("admBtn").textContent = "🔓 관리자 모드 켜짐";
+  await loadCfg();
+  $("cfgRate").value = Math.round(cfg.winRate * 100); $("cfgPay").value = cfg.payout;
   renderAdmin();
 };
 $("admOut").onclick = closeAdmin;
+$("giveOneBtn").onclick = () => {
+  if (!giveKey) autoPick();
+  if (!giveKey) {
+    alert(allPlayers.length ? "검색 결과에서 지급할 참가자를 눌러 선택하세요. (같은 이름이 여러 명이면 하나를 골라야 해요)" : "참가자 목록을 불러오지 못했어요. 서버 주소(FIREBASE_URL)와 인터넷 연결을 확인하세요.");
+    return;
+  }
+  adjust(giveKey, $("giveOne"));
+};
+$("giveAllBtn").onclick = async () => {
+  const d = Math.floor(Number($("giveAll").value));
+  if (!d) { alert("±금액을 입력하세요. 예: 500 또는 -300"); return; }
+  if (needServer()) return;
+  if (!confirm("모든 참가자에게 " + fmt(d) + "P를 반영할까요?")) return;
+  try {
+    const o = (await (await fetch(FIREBASE_URL + "/players.json")).json()) || {};
+    const upd = {};
+    Object.entries(o).forEach(([k, p]) => { if (p && p.name) upd["players/" + k + "/points"] = Math.max(0, Math.floor(p.points + d)); });
+    await fetch(FIREBASE_URL + "/.json", { method: "PATCH", body: JSON.stringify(upd) });
+    await loadRank();
+    alert("반영했어요.");
+  } catch(e){ alert("요청에 실패했어요."); }
+};
+$("cfgSave").onclick = async () => {
+  const r = Number($("cfgRate").value), m = Number($("cfgPay").value);
+  if ($("cfgRate").value === "" || !(r >= 0 && r <= 100)) { alert("성공 확률은 0~100 사이로 입력하세요."); return; }
+  if (!(m > 0)) { alert("성공 배수는 0보다 커야 해요."); return; }
+  if (needServer()) return;
+  await api("PUT", "/config", { winRate: r / 100, payout: m });
+  await loadCfg();
+};
 $("admReset").onclick = () => { if (confirm("모든 참가자 기록을 삭제할까요? 되돌릴 수 없어요.")) api("DELETE", "/players"); };
 
 async function loadRank(){
   try {
     const r = await fetch(FIREBASE_URL + "/players.json");
     const o = (await r.json()) || {};
-    allPlayers = Object.entries(o).filter(([k, p]) => p && p.name).map(([k, p]) => ({ ...p, key: k })).sort((x, y) => y.points - x.points);
+    allPlayers = Object.entries(o).filter(([k, p]) => p && p.name).map(([k, p]) => ({ ...p, key: k })).sort((x, y) => score(y) - score(x));
     renderRank(allPlayers.slice(0, 20));
-    if (isAdmin) renderAdmin();
+    if (isAdmin && !$("admin").contains(document.activeElement)) renderAdmin();
   } catch(e){ $("notice").textContent = "랭킹을 불러오지 못했어요."; }
 }
 
@@ -195,6 +342,7 @@ async function init(){
   try { uid = localStorage.getItem("bet-uid"); if (!uid) { uid = "u" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); localStorage.setItem("bet-uid", uid); } } catch(e){ uid = "u" + Math.random().toString(36).slice(2, 10); }
   if (FIREBASE_URL) {
     db = true;
+    loadCfg();
     if (me) await syncMe();
     loadRank(); setInterval(loadRank, 5000);
   } else {
@@ -206,17 +354,17 @@ async function init(){
 $("joinBtn").onclick = async () => {
   const name = $("nick").value.trim();
   if (!name) { $("nick").focus(); return; }
-  me = { name, points: START, wins: 0, losses: 0 };
+  me = { name, points: START, wins: 0, losses: 0, resets: 0 };
   await save(); showGame();
   if (!(db && uid)) renderRank([{ ...me }]);
 };
 
-$("odds").textContent = "성공 확률 " + Math.round(WIN_RATE * 100) + "% · 성공하면 건 금액의 " + PAYOUT + "배 획득, 실패하면 잃어요.";
+updateOdds();
 $("amt").addEventListener("keydown", e => { if (e.key === "Enter") $("go").click(); });
 
 $("go").onclick = async () => {
   if (busy) return;
-  busy = true; const synced = await syncMe(); busy = false;
+  busy = true; const [synced] = await Promise.all([syncMe(), loadCfg()]); busy = false;
   if (!synced) { $("msg").className = "msg no"; $("msg").textContent = "관리자에 의해 초기화됐어요. 닉네임부터 다시 시작해 주세요."; return; }
   const raw = $("amt").value.replace(/^\s*!?(배팅|베팅)\s*/, "").trim();
   const amt = raw === "올인" ? me.points : Math.floor(Number(raw.replace(/,/g, "")));
@@ -224,7 +372,8 @@ $("go").onclick = async () => {
   if (!(amt >= 10)) { m.className = "msg no"; m.textContent = "최소 10P부터 걸 수 있어요."; return; }
   if (amt > me.points) { m.className = "msg no"; m.textContent = "보유 포인트보다 많이 걸 수 없어요."; return; }
   busy = true;
-  if (Math.random() < WIN_RATE) { me.points += amt * PAYOUT; me.wins++; m.className = "msg ok"; m.textContent = "🎉 성공! +" + fmt(amt * PAYOUT) + "P"; }
+  const rate = typeof me.winRate === "number" ? me.winRate : cfg.winRate;
+  if (Math.random() < rate) { const gain = Math.floor(amt * cfg.payout); me.points += gain; me.wins++; m.className = "msg ok"; m.textContent = "🎉 성공! +" + fmt(gain) + "P"; }
   else { me.points -= amt; me.losses++; m.className = "msg no"; m.textContent = "💥 실패… -" + fmt(amt) + "P"; }
   render();
   await save();
@@ -233,7 +382,7 @@ $("go").onclick = async () => {
 };
 
 $("reset").onclick = async () => {
-  me.points = START; render(); await save();
+  me.points = START; me.resets = (me.resets || 0) + 1; render(); await save();
   if (!(db && uid)) renderRank([{ ...me }]);
 };
 
